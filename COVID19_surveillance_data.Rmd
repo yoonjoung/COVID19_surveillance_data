@@ -1,0 +1,527 @@
+---
+output:
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+---
+```{r intro, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(echo=FALSE, 
+                      message=FALSE, 
+                      comment = "", 
+                      warning=FALSE, 
+                      results="hide") 
+date<-as.Date(Sys.time(	), format='%d%b%Y')
+time<-Sys.time()
+setwd("C:/Users/YoonJoung Choi/Dropbox/0 Project/COVID19")
+
+#library(dplyr)
+#library(ggplot2)
+suppressMessages(library(dplyr))
+suppressMessages(library(lubridate))
+suppressMessages(library(plotly))
+```
+
+```{r accessdata}
+#dtaraw<-read.csv("C:/Users/YoonJoung Choi/Dropbox/0 Project/COVID19/nCoV2019/latest_data/covid-19.data.2020-03-24T031039.csv")
+dtaraw<-read.csv("C:/Users/YoonJoung Choi/Dropbox/0 Project/COVID19/nCoV2019/latest_data/covid-19.data.2020-03-31T012540.csv")
+dim(dtaraw)
+
+total<-nrow(dtaraw)
+column<-ncol(dtaraw)
+countries<-length(unique(dtaraw$country))
+
+#https://www.nature.com/articles/s41597-020-0448-0.pdf
+#https://www.thelancet.com/journals/laninf/article/PIIS1473-3099(20)30119-5/fulltext#%20
+```
+__Global Open Access COVID-19 Epidemiological Data: What is it? How good the data quality is? and How can we improve it?__  
+
+####1. What is Open Access COVID-19 Epidemiological Data? 
+Coronavirus disease 2019 (COVID-19) has been spreading rapidly across the globe. Basic aggregate data such as total number of tests, new cases, and deaths have been published regularly and frequently, providing critical information to understand the magnitude, pace, and location of the epidemic. Compared to previous disease outbreaks, we see substantially more publicly accessible data (Dong 2020, WHO 2020) and use of such data by media and researchers. This rapid and transparent information has been extremely valuable for not only the public health authorities but also the general public. 
+
+In addition to the aggregate data, a research group published [Open Access Epidemiological Data](https://www.thelancet.com/journals/laninf/article/PIIS1473-3099(20)30119-5/fulltext), a centralized global database with information for each individual case based on reports from WHO, Ministries of Health, and Chinese health authorities. __This rapid action to establish and share this open access, machine-readable, regularly-updated (about twice a day), de-identified case-level data is beyond commendable__. It can provide data to answer questions that require disaggregated information by specific background characteristics. There are 34 variables in the database to cover age, sex, sub-national location, presence of underlying chronic illness, travel history, and dates of onset of symptoms, hospitalization, and laboratory confirmation. [Further methodologic details about the database](https://www.nature.com/articles/s41597-020-0448-0.pdf)) were recently published. The research team collaborated with data curators who thoroughly assessed source data from individual countries as well as WHO, and applied advanced data management techniques to create and update the large database. Anybody can view/access it [at their GitHub](https://github.com/beoutbreakprepared/nCoV2019/tree/master/latest_data). So, as a data enthusiast, I was thrilled to see it and _do_ admire efforts by the research team.   
+
+####2. What does the data quality look like? 
+As a good public health data scientist, meanwhile, I started assessing the data quality. However, the quality of the case-level data is suboptimal. 
+
+First, timeliness, one of the most important requirements for outbreak data, is poor. As of March 31, 6:41PM EST, a total of `r total` cases from `r countries` countries have been included in the database. This is less than 20% of the total confirmed cases available on the same date from currently available sources - like [this](https://www.arcgis.com/apps/opsdashboard/index.html#/bda7594740fd40299423467b48e9ecf6) or [this](https://experience.arcgis.com/experience/685d0ace521648f8a5beeeee1b9125cd). Since there is no easily accessible information on the date of the source data, we cannot assess the actual timeline between laboratory confirmation, reporting of the result in the source data, and inclusion of the case in the database. 
+
+```{r datawrangling}
+dta<-dtaraw %>% 
+    mutate(
+    #basic
+        global=1, 
+        obs=1, 
+        case=1, 
+    #outcome - death 
+        death= (outcome=="died" | outcome=="death"), 
+    #completeness
+        compcountry = (country!=""),
+        compsex = (sex=="female"|sex=="Female"|sex=="male"|sex=="Male"),
+        compage = (age!="N/A" & age!="Aug-68" & age!=""),  
+        agesingle=as.numeric(as.character(age)), 
+        compagesingle=(is.na(agesingle)==FALSE), 
+        compchronic = (chronic_disease!="N/A" & chronic_disease!=""),
+        compdateconfirmation = date_confirmation!="",
+    #agegroup
+        agegroup=(compage==T & compagesingle==F),    
+        agebegin=as.numeric(sapply(strsplit(as.character(age), "\\-"), 
+                                   "[", 1 )), 
+        ageend=as.numeric(sapply(strsplit(as.character(age), "\\-"), 
+                                 "[", 2 )),
+        agerange=ageend-agebegin, 
+        agerangeopen=(is.na(agerange)==TRUE & agegroup==T), 
+        agerange5=(agerange==4 & agegroup==T),    
+        agerange10=(agerange==9 & agegroup==T),
+        agerangewide=(agerange>=10 & agegroup==T & agerangeopen==F)
+    )
+
+#dta<-dta%>% filter(compage==T & compagesingle==F) %>% select(starts_with("age"))
+#head(dta, 10)
+#dta<-dta%>% filter(agerangeopen==T)
+#head(dta, 30)
+
+#table(dta$country, dta$compdateconfirmation)
+#table(dta$country, dta$compcountry)
+#table(dta$sex, dta$compsex)
+#table(dta$age, dta$compage)
+#table(dta$age, dta$agesingle)
+#table(dta$date_confirmation, dta$comdateconfirmation)
+#table(dta$compage, dta$compagesingle)
+#table(dta$chronic_disease_binary, dta$compchronic)
+#table(dta$chronic_disease, dta$compchronic)
+```
+
+```{r comp, results="asis"}
+dtasum<- dta %>% 
+    select(global, starts_with("comp"), starts_with("age") ) %>%
+    select(-age, -agebegin, -ageend, -agerange, -compcountry) %>%
+    group_by(global) %>%     
+    summarize_all(funs(mean), na.rm=TRUE)
+
+denominator<- dta %>% 
+    select(global, case) %>%
+    group_by(global) %>%     
+    summarize_all(funs(sum))
+
+dtasum<-left_join(dtasum, denominator, by = "global")  %>%
+    mutate(
+        compsex=round(100*(compsex), 1), 
+        compage=round(100*(compage), 1), 
+        compagesingle=round(100*(compagesingle), 5), 
+        compchronic=round(100*(compchronic), 5), 
+        agegroup=round(100*(agegroup), 5),
+        agerange5=round(100*(agerange5), 5),
+        agerange10=round(100*(agerange10), 5), 
+        agerangewide=round(100*(agerangewide), 5),
+        agerangeopen=round(100*(agerangeopen), 5)
+    )
+
+compsex<-mean(dtasum$compsex)
+compage<-mean(dtasum$compage)
+
+agesingle<-mean(dtasum$compagesingle)
+agegroup<-mean(dtasum$agegroup)
+agerange5<-mean(dtasum$agerange5)
+agerange10<-mean(dtasum$agerange10)
+agerangewide<-mean(dtasum$agerangewide)
+agerangeopen<-mean(dtasum$agerangeopen)
+ 
+pctagesingle<-round(100*agesingle/compage, 0)
+pctagegroup<-round(100*agegroup/compage, 0)
+pctagerange5<-round(100*agerange5/compage, 0)
+pctagerange10<-round(100*agerange10/compage, 0)
+pctagerangewide<-round(100*agerangewide/compage, 0)
+pctagerangeopen<-round(100*agerangeopen/compage, 0)
+```
+#####2.1 Overall completeness of reported age and sex
+Second, completeness (i.e., the extent to which an actual and reasonable value is recorded, for example age 57, not 575 or missing) is one of the most important attributes of high quality data, as analyses based on less complete data can produce biased results. When completeness of age and sex information - the two most basic demographic characteristics in epidemiologic studies - is assessed among the currently available `r total` cases, __only `r compage`% and `r compsex`% have complete information for age and sex, respectively__
+
+Even among cases with complete age, there is substantial variation in units used by different countries, challenging pooled data analysis. Further, sometimes age reporting is in units that are too wide for epidemiologic studies. Among cases with age, `r pctagesingle`% have age reported in a single year, `r pctagerange5`% in 5-year age groups, `r pctagerange10`% in 10-year age groups, and `r pctagerangewide`% in age groups exceeding 10 years. Open-age groups - which are typically used for older populations - are used in `r pctagerangeopen`% of cases with age in the database, but often the groups reference the general adult population rather than older populations; (e.g., '20 and above', '18 and above') or the groups start at a relatively low, old age (e.g., '60 and above'). This is problematic, since mortality varies greatly by age even in that open range of 60 and above. See this [example of age-specific mortality rates in South Korea](https://rpubs.com/YJ_Choi/COVID19_SouthKorea).    
+
+```{r agegroup}
+#Below shows various age-group categories included in the database. 
+
+#table(dta$age)
+
+agegroup<-dta %>%
+    filter(compage==T & compagesingle==F & agerangeopen==T) %>%
+    group_by(age) %>%
+    tally()%>%
+    arrange(-n)
+
+head(agegroup, nrow(agegroup))
+```
+
+```{r compbycountry, results="asis"}
+dtasum<- dta %>% 
+    filter(compcountry==TRUE) %>%
+    select(country, starts_with("comp"), -compcountry) %>%
+    group_by(country) %>%     
+    summarize_all(funs(mean), na.rm=TRUE)
+
+denominator<- dta %>% 
+    filter(compcountry==TRUE) %>%
+    select(country, case) %>%
+    group_by(country) %>%     
+    summarize_all(funs(sum))
+
+dtasum<-left_join(dtasum, denominator, by = "country") %>%
+    select(-compchronic)%>%
+    mutate(
+        compsex=round(100*(compsex), 1), 
+        compage=round(100*(compage), 1), 
+        compagesingle=round(100*(compagesingle), 1), 
+        compdateconfirmation=round(100*(compdateconfirmation), 1) 
+    )
+
+dtasum500<-dtasum%>% filter(case>=500)%>%arrange(case)
+dtasum150<-dtasum%>% filter(case>=150)%>%arrange(case)
+dtasum120<-dtasum%>% filter(case>=120)%>%arrange(case)
+dtasum90<-dtasum%>% filter(case>=90)%>%arrange(case)
+dtasum30<-dtasum%>% filter(case>=30)%>%arrange(case)
+
+dtasum150n<-nrow(dtasum150)
+dtasum120n<-nrow(dtasum120)
+dtasum90n<-nrow(dtasum90)
+dtasum30n<-nrow(dtasum30)
+
+compsexmin<-min(dtasum30$compsex)
+compsexmax<-max(dtasum30$compsex)
+compagemin<-min(dtasum30$compage)
+compagemax<-max(dtasum30$compage)
+```
+#####2.2 Completeness of reported age and sex by country 
+Across countries, data completeness varies substantially. Among `r dtasum30n` countries that have 30 or more confirmed cases included in this database, the below figure shows completeness in age and sex reporting by country. It ranges from 0% to 100% in Singapore for both reported age and sex of patients (Figure 1). There is no clear relationship between the total number of cases and completeness (e.g., the less cases, the higher completeness) (Figure 2). 
+
+_Hover over the figures to see values and more options._
+```{r}
+#__Box 1__. Completeness of age and sex reporting by country (among `r dtasum30n` countries with 30 or more confirmed cases in the database)
+
+#head(dtasum500, nrow(dtasum500))
+#head(dtasum30, nrow(dtasum30))
+```
+
+__Figure 1__. Completeness of age and sex reporting by country (among `r dtasum30n` countries with 30 or more confirmed cases in the database)
+```{r plotcompbycountry, results="asis", fig.align="left", out.width = "800px"}
+dtafig<-dtasum30
+#plot_ly(dta, x = ~country, y = ~compage, type = "bar")
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compage, decreasing = TRUE)])
+figage<-plot_ly(dtafig, x = ~country, y = ~compage, type="bar", name="age") %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on age")
+            )
+
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compsex, decreasing = TRUE)])
+figsex<-plot_ly(dtafig, x = ~country, y = ~compsex, type="bar", name="sex") %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on sex")
+            )
+
+fig <- subplot(figage, figsex) %>%
+        layout(
+            yaxis = list(title = "% of reported cases with complete information",
+                         titlefont=list(size=10)),
+            legend = list(orientation = "h",   
+                        xanchor = "center",  
+                        x=0.5, y=100)            
+            )
+
+fig
+```
+
+__Figure 2__. Relationship between completeness of reporting and the number of cases (among `r dtasum30n` countries with 30 or more confirmed cases in the database)
+```{r plotcompandcase, results="asis", fig.align="left", out.width = "800px"}
+dtafig<-dtasum30
+
+figage<-plot_ly(dtafig, x = ~case, y = ~compage, name="age",
+                type = 'scatter', mode = 'markers') %>%
+        layout(
+            xaxis = list(type = "log")
+            ) 
+
+figsex<-plot_ly(dtafig, x = ~case, y = ~compsex, name="sex",
+                type = 'scatter', mode = 'markers') %>%
+        layout(
+            xaxis = list(type = "log")
+            )
+
+fig <- subplot(figage, figsex) %>%
+        layout(
+            xaxis = list(title = "Number of cases reported in the database",
+                         titlefont=list(size=10),
+                         titelposition="center"),
+            yaxis = list(title = "% of reported cases with complete information",
+                         titlefont=list(size=10)),
+            legend = list(orientation = "h",   
+                        xanchor = "center",  
+                        x=0.5, y=100)            
+            )
+
+fig
+```
+
+```{r compbycountryfirst}
+dtafirst<- dta %>% 
+    filter(compcountry==TRUE) %>%
+    filter(country!="China") %>%
+    select(country, date_confirmation, ID, starts_with("comp"), -compcountry) %>%
+    mutate( 
+        day=as.numeric(substr(date_confirmation, start = 1, stop = 2)),
+        month=as.numeric(substr(date_confirmation, start = 4, stop = 5)),
+        year=as.numeric(substr(date_confirmation, start = 7, stop = 10))
+        ) %>%
+    arrange(country, year, month, day, ID) %>%
+    group_by(country) %>% 
+    mutate(
+        idwithincountry = row_number(),
+        totalcountry= n()
+        ) 
+    
+dtasumfirst30<-dtafirst %>% 
+    filter(totalcountry>=30 & idwithincountry<=30) %>%
+    select(country, compsex, compage, compagesingle, totalcountry) %>%
+    group_by(country) %>% 
+    summarize_all(funs(mean), na.rm=TRUE) %>% 
+    mutate(
+        compsex30=round(100*(compsex), 1), 
+        compage30=round(100*(compage), 1), 
+        compagesingle30=round(100*(compagesingle), 1) 
+        ) %>%
+    select(-compsex, -compage, -compagesingle)
+    
+dtasumfirst60<-dtafirst %>% 
+    filter(totalcountry>=60 & idwithincountry<=60) %>%
+    select(country, compsex, compage, compagesingle) %>%
+    group_by(country) %>% 
+    summarize_all(funs(mean), na.rm=TRUE) %>% 
+    mutate(
+        compsex60=round(100*(compsex), 1), 
+        compage60=round(100*(compage), 1), 
+        compagesingle60=round(100*(compagesingle), 1) 
+        ) %>%
+    select(-compsex, -compage, -compagesingle)
+
+dtasumfirst90<-dtafirst %>% 
+    filter(totalcountry>=90 & idwithincountry<=90) %>%
+    select(country, compsex, compage, compagesingle) %>%
+    group_by(country) %>% 
+    summarize_all(funs(mean), na.rm=TRUE) %>% 
+    mutate(
+        compsex90=round(100*(compsex), 1), 
+        compage90=round(100*(compage), 1), 
+        compagesingle90=round(100*(compagesingle), 1) 
+        ) %>%
+    select(-compsex, -compage, -compagesingle) 
+
+dtasumfirst120<-dtafirst %>% 
+    filter(totalcountry>=120 & idwithincountry<=120) %>%
+    select(country, compsex, compage, compagesingle) %>%
+    group_by(country) %>% 
+    summarize_all(funs(mean), na.rm=TRUE) %>% 
+    mutate(
+        compsex120=round(100*(compsex), 1), 
+        compage120=round(100*(compage), 1), 
+        compagesingle120=round(100*(compagesingle), 1) 
+        ) %>%
+    select(-compsex, -compage, -compagesingle) 
+
+dtasumfirst150<-dtafirst %>% 
+    filter(totalcountry>=150 & idwithincountry<=150) %>%
+    select(country, compsex, compage, compagesingle) %>%
+    group_by(country) %>% 
+    summarize_all(funs(mean), na.rm=TRUE) %>% 
+    mutate(
+        compsex150=round(100*(compsex), 1), 
+        compage150=round(100*(compage), 1), 
+        compagesingle150=round(100*(compagesingle), 1) 
+        ) %>%
+    select(-compsex, -compage, -compagesingle) 
+
+dtasumfirst<-left_join(dtasum30, dtasumfirst30, by = "country")  
+dtasumfirst<-left_join(dtasumfirst, dtasumfirst60, by = "country")  
+dtasumfirst<-left_join(dtasumfirst, dtasumfirst90, by = "country")  
+dtasumfirst<-left_join(dtasumfirst, dtasumfirst120, by = "country")  
+dtasumfirst<-left_join(dtasumfirst, dtasumfirst150, by = "country")  
+
+temp<-dtafirst %>% filter(country=="Singapore") 
+nSingapore<-mean(temp$totalcountry)
+temp<-dtafirst %>% filter(country=="Canada") 
+nCanada<-mean(temp$totalcountry)
+temp<-dtafirst %>% filter(country=="Australia") 
+nAustralia<-mean(temp$totalcountry)
+temp<-dtafirst %>% filter(country=="Mexico") 
+nMexico<-mean(temp$totalcountry)
+#View(dtasumfirst)
+
+```
+
+#####2.3 Completeness of reported age and sex by country: How has it changed over time? 
+More interestingly, in terms of cumulative completeness for the first 30, 60, 90, 120, and 150 confirmed cases there was also great variation between countries as they moved into crisis mode (Figures 3.A and 3.B).  
+* Singapore, Canada, Mexico, and Australia have very high completeness for both sex and age among the first 30 as well as throughout the first 150 cases.  
+* However, __in most countries, the data completeness decreased as the number of cases increased. In South Korea, for example, the completeness initially was very high, exceeding 90%, but dropped rapidly throughout the first 150 cases__, potentially because the number of cases increased exponentially over a very short time period (the total number of cases increased from 30 to 156 over 5 days) (KCDC 2000).   
+* The pattern in US and Germany is unique in that for the first 90 cases data completeness improved, though it declined later, as reflected in the completeness among the total cases in the database.   
+
+Even in Canada, which had high completeness throughout the first 150 cases, the overall completeness is now low for all cases currently included in the database (`r nCanada` as of March 31). In Singapore, Mexico, and Australia, `r nSingapore`, `r nMexico`, and `r nAustralia` cases are included in the database, respectively, and the overall completeness remains high for these countries.
+
+_Hover over the figures to see values and more options._
+```{r plotcompbycountryfirstage120, fig.align="left", out.width = "800px"}
+#__Figure 3.A__. Completeness of age reporting for the first 30, 60, 90 and 120 confirmed cases by country (among `r dtasum120n` countries with 120 or more confirmed cases in the database)
+
+dtafig<-dtasumfirst%>% filter(case>=120)%>% filter(country!="China")
+
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compage30, dtafig$compage120, dtafig$compage, decreasing = TRUE)])
+figage<-plot_ly(dtafig, x = ~country, y = ~compage30, type="bar", 
+                name="First 30 cases", 
+                marker = list(color = "rgb(8,69,148)") ) %>%
+        add_trace(y = ~compage60, name = 'First 60 cases',
+                  marker = list(color = "rgb(33,113,181)") ) %>%
+        add_trace(y = ~compage90, name = 'First 90 cases',
+                  marker = list(color = "rgb(66,146,198)") ) %>%
+        add_trace(y = ~compage120, name = 'First 120 cases',
+                  marker = list(color = "rgb(107,174,214)") ) %>%
+        add_trace(y = ~compage, name = 'All cases',
+                  marker = list(color = "rgb(253,141,60)") ) %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on age")
+            )
+
+figage
+```
+
+```{r plotcompbycountryfirstsex120, fig.align="left", out.width = "800px"}
+#__Figure 3.B__. Completeness of sex reporting for the first 30, 60, 90, and 120 confirmed cases by country (among `r dtasum120n` countries with 120 or more confirmed cases in the database)
+dtafig<-dtasumfirst%>% filter(case>=120)%>% filter(country!="China")
+
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compsex30, dtafig$compsex120, dtafig$compsex, decreasing = TRUE)])
+figsex<-plot_ly(dtafig, x = ~country, y = ~compsex30, type="bar", 
+                name="First 30 cases", 
+                marker = list(color = "rgb(8,69,148)") ) %>%
+        add_trace(y = ~compsex60, name = 'First 60 cases',
+                  marker = list(color = "rgb(33,113,181)") ) %>%
+        add_trace(y = ~compsex90, name = 'First 90 cases',
+                  marker = list(color = "rgb(66,146,198)") ) %>%
+        add_trace(y = ~compsex120, name = 'First 120 cases',
+                  marker = list(color = "rgb(107,174,214)") ) %>%
+        add_trace(y = ~compsex, name = 'All cases',
+                  marker = list(color = "rgb(253,141,60)") ) %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on sex")
+            )
+
+figsex
+```
+
+__Figure 3.A__. Completeness of age reporting for the first 30, 60, 90, 120  and 150 confirmed cases by country (among `r dtasum150n` countries with 150 or more confirmed cases in the database)
+```{r plotcompbycountryfirstage150, results="asis", fig.align="left", out.width = "800px"}
+
+dtafig<-dtasumfirst%>% filter(case>=150)%>% filter(country!="China")
+
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compage30, dtafig$compage150, dtafig$compage, decreasing = TRUE)])
+figage<-plot_ly(dtafig, x = ~country, y = ~compage30, type="bar", 
+                name="First 30 cases", 
+                marker = list(color = "rgb(8,69,148)") ) %>%
+        add_trace(y = ~compage60, name = 'First 60 cases',
+                  marker = list(color = "rgb(33,113,181)") ) %>%
+        add_trace(y = ~compage90, name = 'First 90 cases',
+                  marker = list(color = "rgb(66,146,198)") ) %>%
+        add_trace(y = ~compage120, name = 'First 120 cases',
+                  marker = list(color = "rgb(107,174,214)") ) %>%
+        add_trace(y = ~compage150, name = 'First 150 cases',
+                  marker = list(color = "rgb(158,202,225)") ) %>%
+        add_trace(y = ~compage, name = 'All cases',
+                  marker = list(color = "rgb(253,141,60)") ) %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on age")
+            )
+
+figage
+```
+__Figure 3.B__. Completeness of sex reporting for the first 30, 60, 90, 120 and 150 confirmed cases by country (among `r dtasum150n` countries with 150 or more confirmed cases in the database)
+```{r plotcompbycountryfirstsex150, results="asis", fig.align="left", out.width = "800px"}
+
+dtafig<-dtasumfirst%>% filter(case>=150)%>% filter(country!="China")
+
+dtafig$country<-factor(dtafig$country, 
+                    levels = unique(dtafig$country) 
+                    [order(dtafig$compsex30, dtafig$compsex150, dtafig$compsex, decreasing = TRUE)])
+figsex<-plot_ly(dtafig, x = ~country, y = ~compsex30, type="bar", 
+                name="First 30 cases", 
+                marker = list(color = "rgb(8,69,148)") ) %>%
+        add_trace(y = ~compsex60, name = 'First 60 cases',
+                  marker = list(color = "rgb(33,113,181)") ) %>%
+        add_trace(y = ~compsex90, name = 'First 90 cases',
+                  marker = list(color = "rgb(66,146,198)") ) %>%
+        add_trace(y = ~compsex120, name = 'First 120 cases',
+                  marker = list(color = "rgb(107,174,214)") ) %>%
+        add_trace(y = ~compsex150, name = 'First 150 cases',
+                  marker = list(color = "rgb(158,202,225)") ) %>%
+        add_trace(y = ~compsex, name = 'All cases',
+                  marker = list(color = "rgb(253,141,60)") ) %>%
+        layout(
+            xaxis = list(title = "Country",  
+                         autotick = FALSE,
+                         showticklabels = TRUE, 
+                         tickfont = list(size=8), 
+                         tickangle=-90
+                         ),
+            yaxis = list(title = "% of reported cases with information on sex")
+            )
+
+figsex
+```
+_Note: Countries are sorted in descending order of completeness for the first 30 cases and completeness for the first 150 cases. All cases refer to all cases currently included in the database. China is excluded in this figure, since it is the first country affected by the epidemic_.
+
+####3. What can we do to improve the database? 
+Patients care and epidemic control is a top priority in the middle of a crisis. Countries understandably can be delayed in sharing case-level data with WHO and other countries, while more detailed and complete data are available and shared within each individual countries - see examples in [China](https://www.who.int/docs/default-source/coronaviruse/who-china-joint-mission-on-covid-19-final-report.pdf), [South Korea](https://www.cdc.go.kr/board/board.es?mid=&bid=0030), and [US](https://www.cdc.gov/mmwr/volumes/69/wr/mm6912e2.htm#T1_down). However, in rapidly unfolding pandemic outbreaks, sharing data across countries is critical. Having open access, good quality case-level data will help us understand the global pandemic and develop best strategies to combat it. 
+
+A streamlined and coordinated epidemic surveillance data system should be developed and used by countries. The database system should include a limited number of essential variables that are critical to develop rapid and specific interventions. For data collection, data entry tools should be developed to minimize human errors, while the unit of data is useful for research and programmatic responses. Importantly, the system should improve processes for reporting and sharing case-level data with WHO as well as the public to optimize timeliness. Without high quality source data from individual countries, efforts to establish a global database have only limited value.  After this immediate crisis is over, this should be a top priorities for WHO, member countries, and the global health data community. 
+
+<p style="color:blue">
+* Last updated on: `r date`  
+* For typos, errors, and questions, contact me at [www.isquared.global](https://www.isquared.global/YJ")
+</p>
+
+_Making Data Delicious, One Byte at a Time_, in good times and bad times.
+
+
